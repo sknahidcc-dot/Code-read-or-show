@@ -1,0 +1,66 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Organize files (flat upload support)
+        run: |
+          mkdir -p lib assets
+          for f in *.dart; do [ -e "$f" ] && mv "$f" lib/; done || true
+          for f in logo.png developer.png; do [ -e "$f" ] && mv "$f" assets/; done || true
+          ls -R lib assets
+
+      - name: Generate Android project
+        run: |
+          flutter create --platforms=android --org com.jobexpress --project-name job_express_attendance /tmp/scaffold
+          rm -rf android
+          cp -r /tmp/scaffold/android ./android
+
+      - name: Patch manifest
+        run: |
+          python3 - <<'PY'
+          import re
+          p='android/app/src/main/AndroidManifest.xml'
+          s=open(p,encoding='utf8').read()
+          perms='''    <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+              <uses-feature android:name="android.hardware.camera" android:required="false"/>
+          '''
+          if 'android.permission.CAMERA' not in s:
+              s=s.replace('<application', perms+'    <application',1)
+          s=re.sub(r'android:label="[^"]*"','android:label="Job Express Attendance"',s,count=1)
+          open(p,'w',encoding='utf8').write(s)
+          PY
+          cat android/app/src/main/AndroidManifest.xml | head -20
+
+      - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+
+      - name: Analyze (non-blocking)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        continue-on-error: true
+
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JobExpressAttendance-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
